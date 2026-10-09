@@ -820,7 +820,7 @@
     </div>
   </section>
 
-  <!-- 战败引渡交互条 (模拟被击败后的魔法部强行结算) -->
+  <!-- 战败引渡交互条 -->
   <section class="defeat-bar">
     <div class="defeat-bar-text">
       <b>⚠️ 负伤/战败判定：</b> 若角色在秘境内被击败，由魔法部强行传送撤离（常规物资全失，仅安全箱结算）。
@@ -937,9 +937,7 @@
         <span>🛡️ 魔法部特许·空间安全箱 (1格 - 战败时唯一必定保留)</span>
         <span style="font-size: 10px; color: var(--text-muted);">点击常规背包物品可移入此处</span>
       </div>
-      <div class="secure-slot-wrap" id="secureSlotWrap">
-        <!-- 动态生成安全箱内容 -->
-      </div>
+      <div class="secure-slot-wrap" id="secureSlotWrap"></div>
     </div>
 
     <div class="backpack-grid" id="backpackGrid"></div>
@@ -981,7 +979,6 @@
         </div>
       </div>
 
-      <!-- 超级背包 (20粉尘购买，容量直接达到15格) -->
       <div class="shop-card super">
         <div>
           <h3 style="color:#38bdf8;">虚空折叠·深潜超级背包 (超级背包)</h3>
@@ -1029,7 +1026,7 @@
 
   <div class="toast-notice" id="toastNotice"></div>
   <script>
-    /* ================= 1. 品级与物品库 (金色仅能换粉尘) ================= */
+    /* ================= 1. 品级与物品库 ================= */
     const RARITY = {
       WHITE:  { key: 'white',  name: '普通', color: 'var(--rarity-white)',  currency: 'COIN' },
       GREEN:  { key: 'green',  name: '稀有', color: 'var(--rarity-green)',  currency: 'COIN' },
@@ -1062,7 +1059,6 @@
         { name: '四阶法术刻印卷', type: '定型卷轴', icon: '📜', min: 500, max: 920 },
         { name: '勘探者微光罗盘', type: '先遣遗物', icon: '🧭', min: 280, max: 600 }
       ],
-      // 金色(传说)：仅产出 1~3 粉尘，不设古币价值
       gold: [
         { name: '古代祭司骨简',   type: '失落密文', icon: '🦴', minDust: 1, maxDust: 3 },
         { name: '符文共鸣原石',   type: '古代原矿', icon: '💠', minDust: 1, maxDust: 3 },
@@ -1073,7 +1069,6 @@
         { name: '神殿黄金号角',   type: '祭祀乐器', icon: '📯', minDust: 1, maxDust: 3 },
         { name: '萨利昂天工怀表', type: '超古精密', icon: '⏱️', minDust: 2, maxDust: 3 }
       ],
-      // 红色(神话)：产出 10~15 粉尘
       mythic: [
         { name: '沉眠神性原核',   type: '终极秘宝', icon: '🌌', minDust: 10, maxDust: 15 },
         { name: '超古代中枢核心', type: '极渊重器', icon: '💎', minDust: 11, maxDust: 15 },
@@ -1081,18 +1076,19 @@
       ]
     };
 
-    /* ================= 2. 状态机 (包含搜索会话恢复与安全箱) ================= */
+    /* ================= 2. 状态机与持久化本地存档引擎 ================= */
+    const SAVE_KEY = 'RUINS_EXPLORATION_SAVE_V1';
+
     const state = {
       coins: 0,
       dust: 0,
       baseSlots: 5,
       extraSlots: 0,
       isSuperBag: false,
-      backpack: [],      // 常规背包
-      secureItem: null,  // 独立 1 格安全箱
+      backpack: [],
+      secureItem: null,
       purchasedBags: { LOW: false, MID: false, HIGH: false, SUPER: false },
       
-      // 搜索挂起会话状态 (解决问题一)
       searchSession: {
         active: false,
         paused: false,
@@ -1105,6 +1101,43 @@
       isExtracting: false,
       sound: true
     };
+
+    // 保存到本地 localStorage
+    function saveToLocal() {
+      try {
+        const data = {
+          coins: state.coins,
+          dust: state.dust,
+          extraSlots: state.extraSlots,
+          isSuperBag: state.isSuperBag,
+          backpack: state.backpack,
+          secureItem: state.secureItem,
+          purchasedBags: state.purchasedBags
+        };
+        localStorage.setItem(SAVE_KEY, JSON.stringify(data));
+      } catch (e) {
+        console.warn('本地存档写入失败:', e);
+      }
+    }
+
+    // 从本地 localStorage 加载
+    function loadFromLocal() {
+      try {
+        const raw = localStorage.getItem(SAVE_KEY);
+        if (raw) {
+          const data = JSON.parse(raw);
+          state.coins = data.coins || 0;
+          state.dust = data.dust || 0;
+          state.extraSlots = data.extraSlots || 0;
+          state.isSuperBag = !!data.isSuperBag;
+          state.backpack = Array.isArray(data.backpack) ? data.backpack : [];
+          state.secureItem = data.secureItem || null;
+          state.purchasedBags = data.purchasedBags || { LOW: false, MID: false, HIGH: false, SUPER: false };
+        }
+      } catch (e) {
+        console.warn('本地存档读取失败:', e);
+      }
+    }
 
     function getMaxSlots() {
       if (state.isSuperBag) return 15;
@@ -1216,7 +1249,6 @@
       };
     }
 
-    // 开启全新搜刮
     async function startLooting(type) {
       if (state.searchSession.active || state.isExtracting) return;
 
@@ -1252,20 +1284,18 @@
       executeSearchLoop();
     }
 
-    // 核心探索执行循环（支持挂起与恢复）
     async function executeSearchLoop() {
       const sess = state.searchSession;
       const statusEl = document.getElementById('statusText');
 
       while (sess.currentIndex < sess.totalCount) {
-        // 背包已满检测：挂起搜索，等待玩家丢弃物品！
         if (state.backpack.length >= getMaxSlots()) {
           sess.paused = true;
           showBackpackFullWarning(true);
           statusEl.textContent = `⚠️ 背包已满！探索已暂停。请在背包丢弃物品后点击【继续搜索】！`;
           setContainerCardsDisabled(false);
           setTimeout(() => switchTab('backpack'), 400);
-          return; // 暂停退出循环，保留现场
+          return;
         }
 
         const i = sess.currentIndex;
@@ -1289,11 +1319,11 @@
 
         await new Promise(r => setTimeout(r, 1000));
 
-        // 抽取物品并入包
         const rarity = rollRarity(sess.type);
         const item = createItem(rarity);
 
         state.backpack.push(item);
+        saveToLocal(); // 拾取即存档
         updateTopUI();
 
         slot.className = `loot-slot revealed ${rarity.key}`;
@@ -1315,7 +1345,6 @@
         sess.currentIndex++;
       }
 
-      // 全部搜索完毕
       statusEl.textContent = `探查完成。已放入背包。`;
       sess.active = false;
       sess.paused = false;
@@ -1323,7 +1352,6 @@
       setContainerCardsDisabled(false);
     }
 
-    // 丢弃物品后，恢复搜索流程
     function resumeSearch() {
       if (!state.searchSession.active || !state.searchSession.paused) return;
       if (state.backpack.length >= getMaxSlots()) {
@@ -1357,7 +1385,6 @@
 
     /* ================= 6. 安全箱与常规背包操作 ================= */
     function renderBackpackView() {
-      // 1. 渲染安全箱
       const secWrap = document.getElementById('secureSlotWrap');
       secWrap.innerHTML = '';
       if (!state.secureItem) {
@@ -1386,7 +1413,6 @@
         secWrap.appendChild(card);
       }
 
-      // 2. 渲染常规背包
       const grid = document.getElementById('backpackGrid');
       grid.innerHTML = '';
 
@@ -1429,7 +1455,6 @@
       });
     }
 
-    // 存入安全箱
     function moveToSecure(index) {
       if (state.isExtracting) return;
       if (state.secureItem) {
@@ -1438,18 +1463,17 @@
       }
       const item = state.backpack.splice(index, 1)[0];
       state.secureItem = item;
+      saveToLocal(); // 存档
       Sound.beep(600, 0.15);
       showToast(`🛡️ 已将 [${item.name}] 锁入安全箱！`);
       updateTopUI();
       renderBackpackView();
 
-      // 如果有挂起的搜索并且空间腾出，提醒继续
       if (state.searchSession.paused && state.backpack.length < getMaxSlots()) {
         document.getElementById('resumeSearchBtn').style.display = 'inline-block';
       }
     }
 
-    // 从安全箱移回常规背包
     function moveFromSecureToBag() {
       if (state.isExtracting) return;
       if (state.backpack.length >= getMaxSlots()) {
@@ -1459,23 +1483,23 @@
       const item = state.secureItem;
       state.secureItem = null;
       state.backpack.push(item);
+      saveToLocal(); // 存档
       Sound.beep(400, 0.15);
       showToast(`已移回常规背包：${item.name}`);
       updateTopUI();
       renderBackpackView();
     }
 
-    // 丢弃常规背包物品
     function discardBagItem(index) {
       if (state.isExtracting) return;
       if (!state.backpack[index]) return;
       const removed = state.backpack.splice(index, 1)[0];
+      saveToLocal(); // 存档
       Sound.beep(180, 0.12, 'square');
       showToast(`已丢弃：${removed.name}`);
       updateTopUI();
       renderBackpackView();
 
-      // 关键：丢弃腾出空间后，如果处于搜索挂起状态，恢复继续按钮！
       if (state.searchSession.paused && state.backpack.length < getMaxSlots()) {
         document.getElementById('fullAlert').style.display = 'flex';
         document.getElementById('fullAlertMsg').textContent = '✅ 已腾出空间！点击【继续搜索】继续探查剩余暗格！';
@@ -1486,7 +1510,6 @@
     }
 
     /* ================= 7. 安全撤离 vs 战败引渡结算 ================= */
-    // A. 正常安全撤离
     async function startSafeExtraction() {
       if ((state.backpack.length === 0 && !state.secureItem) || state.isExtracting) return;
 
@@ -1506,7 +1529,6 @@
       modal.style.display = 'none';
       state.isExtracting = false;
 
-      // 汇总常规背包 + 安全箱
       const allItems = [...state.backpack];
       if (state.secureItem) allItems.push(state.secureItem);
 
@@ -1523,6 +1545,7 @@
       state.backpack = [];
       state.secureItem = null;
 
+      saveToLocal(); // 结算即存档
       Sound.beep(523, 0.3);
       setTimeout(() => Sound.beep(784, 0.4), 120);
 
@@ -1533,7 +1556,6 @@
       showSettleReport(allItems, earnedCoins, earnedDust, false);
     }
 
-    // B. 战败 / 魔法部紧急拉回引渡 (仅安全箱结算)
     async function triggerDefeatExtraction() {
       if (state.isExtracting) return;
       const confirmDefeat = confirm('🚨 确认已被击溃？\n\n魔法部将撕裂空间进行紧急搜救！\n注意：常规背包所有物资将全部遗失，仅【安全箱】内物品能够带回结算！');
@@ -1555,9 +1577,8 @@
       modal.style.display = 'none';
       state.isExtracting = false;
 
-      // 常规背包全部丢失，仅结算安全箱
       const lostCount = state.backpack.length;
-      state.backpack = []; // 常规背包清空
+      state.backpack = [];
 
       const savedItems = [];
       let earnedCoins = 0;
@@ -1573,13 +1594,13 @@
       state.coins += earnedCoins;
       state.dust += earnedDust;
 
+      saveToLocal(); // 战败结算即存档
       updateTopUI();
       renderBackpackView();
 
       showSettleReport(savedItems, earnedCoins, earnedDust, true, lostCount);
     }
 
-    // 弹出凭证
     function showSettleReport(items, coins, dust, isDefeat, lostCount = 0) {
       const serial = (isDefeat ? 'RESCUE-' : 'RUIN-') + Math.floor(100000 + Math.random() * 900000);
       const timeStr = new Date().toLocaleString('zh-CN', { hour12: false });
@@ -1631,7 +1652,7 @@
       document.getElementById('reportModal').style.display = 'flex';
     }
 
-    /* ================= 8. 商店系统 (含20粉尘超级背包) ================= */
+    /* ================= 8. 商店系统 ================= */
     function buyBackpack(tier, slotsVal, price, curType) {
       if (state.purchasedBags[tier]) return;
 
@@ -1644,16 +1665,16 @@
         state.purchasedBags[tier] = true;
         state.extraSlots += slotsVal;
       } else {
-        // 粉尘购买超级背包
         if (state.dust < price) {
           showToast('❌ 粉尘不足！超级背包需要 20 粉尘！');
           return;
         }
         state.dust -= price;
         state.purchasedBags[tier] = true;
-        state.isSuperBag = true; // 容量直接扩充至15
+        state.isSuperBag = true;
       }
 
+      saveToLocal(); // 购买背包即存档
       Sound.beep(784, 0.3);
       showToast(`🎉 购买成功！当前背包容量升级至 ${getMaxSlots()} 格！`);
 
@@ -1671,27 +1692,36 @@
       });
     }
 
-    /* ================= 9. 清空货币 (防误触输入123) ================= */
+    /* ================= 9. 清空货币与彻底删档 (防误触输入123) ================= */
     function clearAllMoney() {
-      const code = prompt('⚠️ 警告：此操作将清空所有古币与粉尘！\n\n请输入验证码 123 以确认清空：');
+      const code = prompt('⚠️ 警告：此操作将清空所有古币、粉尘并重置背包装备存档！\n\n请输入验证码 123 以确认清空重置：');
       if (code === '123') {
         state.coins = 0;
         state.dust = 0;
+        state.extraSlots = 0;
+        state.isSuperBag = false;
+        state.backpack = [];
+        state.secureItem = null;
+        state.purchasedBags = { LOW: false, MID: false, HIGH: false, SUPER: false };
+        
+        localStorage.removeItem(SAVE_KEY); // 彻底清除本地存档
+        
         updateTopUI();
+        renderBackpackView();
+        updateShopUI();
         Sound.beep(150, 0.4, 'sawtooth');
-        showToast('✅ 资产已彻底清零。');
+        showToast('✅ 存档已彻底重置为初始状态。');
       } else if (code !== null) {
         showToast('❌ 验证码错误，已取消操作。');
       }
     }
 
-    /* ================= 10. URL 参数识别 (?box=1~4 及 ?defeat=1) ================= */
+    /* ================= 10. URL 参数识别 ================= */
     function checkUrlParams() {
       const params = new URLSearchParams(window.location.search);
       const targetBox = params.get('box');
       const isDefeatUrl = params.get('defeat') || params.get('dead') || params.get('rescue');
 
-      // 指定宝箱
       if (targetBox && ['1', '2', '3', '4'].includes(targetBox)) {
         document.querySelectorAll('.container-card').forEach(card => {
           const boxId = card.getAttribute('data-box-id');
@@ -1706,7 +1736,6 @@
         showToast(`🎯 已锁定 DM 指定的【${targetBox}号宝箱】`);
       }
 
-      // 链接直接战败引渡
       if (isDefeatUrl) {
         setTimeout(() => triggerDefeatExtraction(), 500);
       }
@@ -1726,12 +1755,14 @@
     }
 
     window.addEventListener('DOMContentLoaded', () => {
-      // 导航
+      // 1. 先读取本地存档恢复数据
+      loadFromLocal();
+
+      // 2. 绑定页面事件
       document.querySelectorAll('.tab-btn').forEach(btn => {
         btn.addEventListener('click', () => switchTab(btn.getAttribute('data-tab')));
       });
 
-      // 容器点击
       document.querySelectorAll('.container-card').forEach(card => {
         card.addEventListener('click', () => {
           const type = card.getAttribute('data-container');
@@ -1739,27 +1770,20 @@
         });
       });
 
-      // 结算与战败引渡
       document.getElementById('settleBtn').addEventListener('click', startSafeExtraction);
       document.getElementById('defeatActionBtn').addEventListener('click', triggerDefeatExtraction);
-
-      // 继续搜索按钮 (问题一修复)
       document.getElementById('resumeSearchBtn').addEventListener('click', resumeSearch);
 
-      // 关闭凭证弹窗
       document.getElementById('closeReportBtn').addEventListener('click', () => {
         document.getElementById('reportModal').style.display = 'none';
       });
 
-      // 清空资产
       document.getElementById('clearMoneyBtn').addEventListener('click', clearAllMoney);
 
-      // 关闭警报
       document.getElementById('closeAlertBtn').addEventListener('click', () => {
         document.getElementById('fullAlert').style.display = 'none';
       });
 
-      // 商店购买
       document.querySelectorAll('.buy-btn').forEach(btn => {
         btn.addEventListener('click', () => {
           const tier = btn.getAttribute('data-bag');
@@ -1770,7 +1794,6 @@
         });
       });
 
-      // 音效开关
       document.getElementById('soundToggle').addEventListener('click', () => {
         state.sound = !state.sound;
         document.getElementById('soundToggle').textContent = state.sound ? '🔊 音效: 开' : '🔇 音效: 关';
@@ -1778,6 +1801,7 @@
 
       checkUrlParams();
       updateTopUI();
+      updateShopUI();
     });
 
     window.switchTab = switchTab;
